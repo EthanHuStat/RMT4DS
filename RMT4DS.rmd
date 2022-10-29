@@ -1,0 +1,403 @@
+---
+title: "RMT4DS"
+output:
+  html_document:
+    toc: yes
+    toc_float:
+      collapsed: yes
+    toc_depth: 3
+    number_sections: yes
+    theme: journal
+  pdf_document:
+    toc: yes
+    toc_depth: '3'
+---
+
+# Introduction
+This package provides tools for high-dimensional population covariance estimation, matrix denoising, hypothesis testing, general Marchenko–Pastur distribution and distribution of largest eigenvalue of Wishart Matrix.
+
+For spectral density estimation, you can choose either inverting Marchenko–Pastur Equation or method of moment.
+
+For matrix denoising, three settings are considered, sparse signal with known spherical covariance, signal with known spherical covariance, and signal with unknown covariance. Also, you can estimate the rank of signals.
+
+For hypothesis testing of covariance matrix, you can test whether a Gaussian sample comes from identity covariance matrix or a given covariance matrix. You can also test whether two or more Gaussian samples come from the same covariance matrix. Those tests are adjusted to be suitable for high dimensional settings.
+
+
+```{r setup, warning=FALSE}
+library(ggplot2)
+library(MASS)
+library(pracma)
+library(rARPACK)
+library(RMT4DS)
+```
+
+
+# General Marchenko-Pastur Distribution
+Marchenko-Pastur Law is a fundamental tools in random matrix theory. When population covariance matrix is identity, we can analytically derive the MP distribution. However, with more complex population covariance matrix, limiting sample spectral density may behave differently and no analytically density function is available till now. 
+
+The first thing to address is the support of limiting density. In general MP distribution, the support is the union of several intervals. 
+
+For $X\in \mathbb{R}^{n\times p}$ drawn from $\Sigma_p$ with eigenvalues $\lambda_1\ge\lambda_2\ge\cdots\lambda_p$ We define $$f(x)=-\frac{1}{x}+\frac{1}{n}\sum_{i=1}^p\frac{1}{x+\lambda_i^{-1}}$$
+Then, according to [1], the boundaries of the support intervals can be approximated by
+$f(x_i)$, where $x_i$'s are the critical points of $f(\cdot)$.
+
+To approximate the limiting density, we first approximate the Stieltjes Transformation of limit spectral distribution $$m(z)=\int\frac{1}{\lambda-z}\operatorname{d}\mu(\lambda)$$
+And since we can roughly approximate $\mu(\lambda)$ with $\frac{1}{p}\sum_{i=1}^p \mathbf{1}_{\{\lambda_i\le\lambda\}}$, we can then have
+$$m(z)\approx r(z)=\frac{1}{p}\sum_{i=1}^p\frac{1}{\lambda_i-z}$$
+According to Sokhotski-Plemelj formula, $$\lim_{\eta\rightarrow 0^+}\frac{\Im(m(x+\eta \mathrm{i}))}{\pi}=\operatorname{d}\mu(x)$$
+And from [7], $|m(z)-r(z)|$ will be small given small $\eta>1/n^{-1+\tau}$. Therefore, we choose $\eta=0.02$ to approximate the density and get reasonable output. However, such results behave poor near the boundaries and cannot converge to zero if the curve is steep. Therefore we introduce Chebyshev polynomials like [8] to approximate and smooth the density.
+
+Here we choose the second type Chebyshev polynomials $\{U_0,U_1,\cdots\}$ and let $x^{(k)}$ be the k roots of $U_k$. Then we define $E_k =(U_{j-1}(x_i))_{1\le i\le k\\ 1\le j\le l}$, where $l$ is the number of basis we choose.
+
+We define $M_{a,b}(x)=\frac{b-a}{2}x+\frac{b+a}{2}$, $c_k(z;\mu_{Cheb})=-2[z-\sqrt{z-1}\sqrt{z+1}]^{k+1}$ and $C_{\boldsymbol{z}}=(c_{j-1}(z_i;\mu_{Cheb}))_{1\le i\le m\\1\le j \le l}$. 
+
+Denote $g$ the number of intervals and $a_1<b_1<a_2<b_2<\cdots<a_g<b_g$ the boundaries. 
+
+So our problem is to solve
+$$\underset{\boldsymbol{d_j}:E_k\boldsymbol{d_j}\ge 0}{\arg\min}||\sum_{j=1}^g\frac{\pi}{4}(b_j-a_j)C_{M^{-1}_{a_j ,b_j}(\boldsymbol{z})}\boldsymbol{d_j}-r(\boldsymbol{z})||_2$$
+Then we convert the complex programming into quadratic programming. We define
+$$\begin{align}
+\boldsymbol{d}&=\begin{pmatrix}\boldsymbol{d_1}\\ \cdots \\ \boldsymbol{d_g}\end{pmatrix}\\
+C&=(\frac{\pi}{4}(b_1-a_1)C_{M^{-1}_{a_1 ,b_1}(\boldsymbol{z})},\cdots,\frac{\pi}{4}(b_g-a_g)C_{M^{-1}_{a_g ,b_g}(\boldsymbol{z})})\\
+A_1&=\Re(C)\\
+A_2&=\Im(C)\\
+b_1&=\Re(r(\boldsymbol{z}))\\
+b_2&=\Im(r(\boldsymbol{z}))\\
+E&=\begin{pmatrix}
+E_k &\cdots&\boldsymbol{0}\\
+\vdots&\ddots&\\
+\boldsymbol{0}&\cdots&E_k
+\end{pmatrix}
+\end{align}$$
+
+So the problem becomes 
+$$\underset{\boldsymbol{d}:-E\boldsymbol{d}\le0}{\arg\min}:\boldsymbol{d}^T (A_1^T A_1+A_2^T A_2)\boldsymbol{d}-2(A_1^T b_1+A_2^T b_2)^T \boldsymbol{d}$$
+We choose $\boldsymbol{z}$ to be the union of $M_{a_j ,b_j}(\boldsymbol{u})+0.1\operatorname{i}$, where $\boldsymbol{u}$ is $m$ equally spaced points on $[-1,1]$. After solving the programming, we set $\boldsymbol{z}$'s imagery part to be zero and compute the approximated density.
+
+After computing the density, we can then compute quantile or generate random numbers from the distribution.
+
+Here are some examples.
+```{r}
+N = 1000
+M = 300
+d = c(rep(3.8,M/3),rep(1.25,M/3),rep(0.25,M/3))
+qgmp(0.5, ndf=N, pdim=M, eigens=d)
+pgmp(3,ndf=N, pdim=M, eigens=d)
+dgmp(2, ndf=N, pdim=M, eigens=d)
+rgmp(5, ndf=N, pdim=M, eigens=d)
+```
+
+Then we plot fitted density for this distribution.
+```{r}
+xs = seq(0,8,0.001)
+ys = dgmp(xs, ndf=N, pdim=M, eigens=d)
+ggplot(data=data.frame(x=xs, y=ys), 
+       aes(x=x,y=y)) +
+    geom_line(color="black") + 
+    scale_x_continuous(limits=c(0, 8), expand = c(0, 0)) +
+    scale_y_continuous(limits=c(0, 2), expand = c(0, 0)) +
+    labs(title="Approximated Density of General Marchenko-Pastur Distribution", x="X", 
+         y ="Density") + 
+    theme_classic() + theme(plot.title = element_text(hjust = 0.5))
+```
+
+# Distribution of Maximum Eigenvalue of Wishart Matrix
+Distribution of Maximal Eigenvalue of Wishart Matrix is an important part of random matrix. Here, we perform the estimation of such density in real and complex case with general covariance matrix.
+
+We assume $X=Y+Zi$, $Y\in \mathbb{R}^{n\times p}$ and $Z\in \mathbb{R}^{n\times p}$ are i.i.d from $\mathcal{N}(0,\Sigma_p/2)$ and $\Sigma_p$ has eigenvalues $\lambda_1\ge\lambda_2\ge\cdots\ge\lambda_p$. Then we want to get the distribution of largest eigenvalue of $X^* X/n$.
+
+From [9], we first define $H_p(\lambda)=\sum_{i=1}^p \mathbf{1}_{\{\lambda_i\le\lambda\}}$.
+
+Then we solve an equation $$\int (\frac{\lambda c}{1-\lambda c})^2 \operatorname{d} H_p(\lambda)=\frac{n}{p}$$
+with $c\in[0,1/\lambda_1)$.
+
+Next we define
+$$
+\begin{align}
+\mu&=\frac{1}{c}(1+\frac{p}{n}\int\frac{\lambda c}{1-\lambda c}\operatorname{d}H_p(\lambda))\\
+\sigma^3&=\frac{1}{c}(1+\frac{p}{n}\int(\frac{\lambda c}{1-\lambda c})^3\operatorname{d}H_p(\lambda))
+\end{align}
+$$
+Finally, we have 
+$$n^{2/3}\frac{l_1-\mu}{\sigma}\Rightarrow TW_2$$
+where $TW_2$ is type-2 Tracy-Widom distribution.
+
+For real case, we have similar result except that we change type-2 Tracy-Widom distribution to type-1.[10]
+
+Here are some example codes of our functions.
+```{r}
+n = 500
+p = 100
+eigens = c(rep(2,p/2), rep(1, p/2))
+beta = 2
+rWishartMax(n=5, eigens, n, p, beta=beta)
+qWishartMax(0.5, eigens, n, p, beta=beta)
+pWishartMax(3.5, eigens, n, p, beta=beta)
+dWishartMax(3.5, eigens, n, p, beta=beta)
+```
+
+# Sample Covariance Related Limits
+## Distribution of Projection of Eigenvectors of Sample Covariance
+For Wishart matrix W $(p,n,\Sigma_{p\times p})$, where $\Sigma_{p\times p}=UDU^T$ is SVD of $\Sigma_{p\times p}$, we have if $p/n\rightarrow c\in(0,1)$ and $m(z)=\lim_{n\rightarrow \infty} \frac{1}{p}\operatorname{tr}[(W-zI_p)^{-1}]$, i-th eigenvector of W $u_i$ follows
+$$\sqrt{p}u_i v\sim\mathcal{N}\left( 0,v^T\frac{D}{\gamma_i |I_p+m(\gamma_i)D|^2}v\right)$$
+where $\gamma_i$ is the $1-i/p$ quantile of limiting spectral density of W, $|\cdot|$ denotes mod of complex numbers and $v$ is any vector.
+
+Here is an example of our functions. Real variance should be 1. We can see our methods give very close estimate.
+```{r}
+pdim = 100
+cov = diag(pdim)
+svr = 2
+v = runif(pdim)
+v = v/sqrt(sum(v^2))
+vars = MP_vector_dist(k=1:50, v=v, pdim=pdim, svr=svr, cov=cov)$variance
+plot(vars, xlab="index i", ylab="variance", main="Variance of i-th Eigenvector Projection",ylim=c(0,1.1))
+abline(h=1)
+```
+
+## Limiting Expectation of Quadratic Form of Spiked Eigenvector
+Here we compute the expectation of quadratic form $u_i^T g(\Sigma)u_i$, where $\Sigma$ has spiked spectral density, index i is within its spike part and $g(\Sigma)$ is a function of spectral of $\Sigma$.
+```{r}
+quadratic(2, cov=diag(rep(1,500)), svr=2, spike=c(30,20))
+```
+
+## Limits of Spiked Part of General MP Distribution
+We add some spikes to population spectral. Then we get the normal limiting distribution of the spike parts.
+```{r}
+cov_spike(c(10,5), c(rep(2,100),rep(1,100)), 500, 500/200)
+```
+
+# Population Covariance Estimation
+It is okay for us to use sample covariance matrix to estimate population covariance matrix with low-dimensional data. However, with high-dimensional settings, like $p/n\rightarrow c>0$, central limit theorem fails and sample covariance is unbiased but inconsistent. Therefore, we should adopt high-dimensional techniques. Given the rotational invariance of Gaussian orthogonal ensemble, it may be enough for us to work only on the spectral density of population covariance matrix.
+
+## Inverting Marchenko–Pastur Equation
+According to the famous Marchenko–Pastur Equation, we can have the relation between sample limiting spectral distribution and population limiting spectral distribution.
+
+Given $p/n\rightarrow\gamma$, we have
+$$-\frac{1}{v_{\infty}(z)}=z-\gamma\int \frac{\lambda \operatorname{d}H_{\infty}(\lambda)}{1+\lambda v_{\infty}(z)}\ \ \forall z\in\mathbb{C} $$
+where $v_{\infty}$ is the Stieltjes transformation of sample limiting spectral distribution and $H_{\infty}$ is the population limiting spectral distribution. Since $v_{F_P}\rightarrow v_{\infty}$, we use $v_{F_P}$ in our estimation.
+
+We discretize population spectral distribution $H$ into 
+$$H(x)=\sum_{k=1}^K w_k \mathbf{1}_{\{x\ge t_k\}}$$
+given $\sum_{k=1}^K w_k =1$.
+
+Then we pick some $z_j$ and define residuals 
+$$e_j = \frac{1}{v_{F_P}(z_j)}-\frac{p}{n}\sum_{k=1}^K w_k\frac{t_k}{1+t_k v_{F_P}(z_j)}$$
+Final we convert the equation into linear programming
+$$\begin{align}
+&\min_{w_1,\cdots w_K,u}u\\
+s.t.\ &-u\le \Re(e_j)\le u\ \forall j\\
+&-u\le \Im(e_j)\le u\ \forall j\\
+&\sum_{k=1}^K w_k =1\\
+&w_k\ge 0\ \ \forall k
+\end{align}$$
+
+Here we use the spectral distribution $H=\frac{\delta_1+\delta_2}{2}$ as an example. We output the top 10 eigenvalues.
+```{r}
+p = 500
+n = 1000
+S1 = diag(c(rep(2,p/2),rep(1,p/2)))
+X1 = mvrnorm(n, rep(0,p), S1)
+mpest = MPEst(X1, n)
+mpest$d[1:10]
+```
+
+Here we can plot the estimated CDF of the spectral density.
+```{r, echo=FALSE}
+ggplot(data=data.frame(xs=mpest$xs,cdf=mpest$cdf), 
+       aes(x=xs, y=cdf)) +
+    geom_line() +
+    labs(title="Estimated Population Spectral Density", x="Xs", y ="CDF") +
+    theme_classic() + theme(plot.title = element_text(hjust = 0.5))
+```
+
+Due to the randomness of our samples, we can repeat the estimation with different samples and average the results. Here you just need to set value for parameter k in function MPEst. You can use this option in much more complex density estimation.
+
+## Method of Moment
+Besides inverting M-P equation, researchers have efficiently estimated moments of population spectral density using sample covariance matrix.
+
+We define $A=YY^{T}$ and $G$ be A with diagonal and lower triangular entries set to zero. Then $k$-th moment of spectral density of population covariance matrix can be estimated by $\frac{\operatorname{tr}(G^{k-1}A)}{d{n\choose{k}}}$.
+
+Therefore, we can discretize population spectral density like Section 2.1 and use method of moment to estimate the distribution. We also use linear programming here to get numeric results.
+$$\begin{align}
+\min_{\textbf{p}}\ &|\textbf{V}\textbf{p}-\hat{\boldsymbol{\alpha}}|_1\\
+s.t.\ &\textbf{1} ^{T}\textbf{p}=1\\
+&\textbf{p}\ge 0
+\end{align}$$
+where $\textbf{V}_{ij}=t_j^i$ and $\hat{\boldsymbol{\alpha}}_i$ is estimated $i$-th moment of population spectral density.
+
+More details can be found in [2].
+
+We use the same sample as illustration.
+
+```{r}
+momentest = MomentEst(X1, n)
+momentest$d[1:10]
+```
+
+We can also plot the estimated CDF of the spectral density using moment estimate.
+```{r, echo=FALSE}
+ggplot(data=data.frame(xs=momentest$xs,cdf=momentest$cdf), 
+       aes(x=xs, y=cdf)) +
+    geom_line() +
+    labs(title="Estimated Population Spectral Density", x="Xs", y ="CDF") +
+    theme_classic() + theme(plot.title = element_text(hjust = 0.5))
+```
+
+We can repeat and average the results using the same syntax.
+
+# Hypothesis Testing
+## Test of Covariance Matrix
+Since central limit theorem does not work in high-dimensional setting, we have to adjust tests for covariance matrix. The authors make some correction terms to likelihood ratio test statistics to be consistent. Details can be found in [6].
+
+### Test of Given Covariance Matrix
+Here we want to test if our Gaussian samples come from a given covariance matrix. Mean can be given otherwise we use sample mean to calculate sample covariance.
+```{r}
+n = 500
+p = 100
+S1 = diag(rep(1,p))
+S2 = diag(sample(c(1,4),p,replace=TRUE))
+OneSampleCovTest(mvrnorm(n,rep(0,p),S2), S=S2)
+OneSampleCovTest(mvrnorm(n,rep(0,p),S2), S=S1)
+```
+
+### Test of Equal Covariance Matrix
+Here we can input two or more samples to test whether their covariance matrices are equal. Also mean can be given otherwise we use the sample mean.
+```{r}
+TwoSampleCovTest(mvrnorm(n,rep(0,p),S1), mvrnorm(n,rep(0,p),S2))
+TwoSampleCovTest(mvrnorm(n,rep(0,p),S1), mvrnorm(n,rep(0,p),S1))
+MultiSampleCovTest(mvrnorm(n,rep(0,p),S2), mvrnorm(n,rep(0,p),S2),mvrnorm(n,rep(0,p),S2))
+```
+
+# Matrix Denoising
+Many real-world data can be simplified into noise-plus-signal models $Y=X+S$, where X is the noise matrix and S is a low-rank signal. Therefore, denoising of observed data can be important. Some people are using SVD to deal with such problem and use singular values to determine signals and noises. However, such methods do not work well on Gaussian noise cases.
+
+We introduce two methods, step wise SVD and screenot. Stepwise SVD can be applied to i.i.d Gaussian noise $\mathcal{N}(0,1/n)$ while screenot can be applied to correlated Gaussian noise. Step wise SVD works better in sparse signal and i.i.d cases while screenot has wider application.
+
+## Step Wise SVD
+In step wise SVD, we first have to perform simulation to get thresholds to determine signal rank. The idea is that the ratios between ordered eigenvalues will show different patterns in signal and non-signal groups. We compute different ratios between the first and second eigenvalues of $X^{T}X$, where $X\in\mathbb{R}^{n\times p}$ and $X_{ij}\stackrel{i.i.d}{\sim}\mathcal{N}(0,1/n)$. Then we choose $1-\alpha$ percentile as the threshold $1+\tau$.
+
+To determine the rank, we pick $q=\arg\max_i \{1\le i\le \min (n,p):\frac{\lambda_i(Y^{T}Y)}{\lambda_{i+1}(Y^{T}Y)}>1+\tau\}$.
+
+The author gives thresholds for some special cases and we will use $n=1000$, $p=500$, $\alpha=0.02$ with threshold $1+\tau=0.0372$ as the example.
+
+In step wise SVD, we correct both eigenvalues and eigenvectors in sparse signal case and correct only eigenvalues when no prior knowledge about sparsity of signal is given. More details can be found in [3].
+
+We first perform the sparse signal case.
+```{r}
+X2 = mvrnorm(n, rep(0,p), diag(p)/n)
+S1 = diag(nrow=n, ncol=2) %*% diag(c(7,4))%*% diag(nrow=2, ncol=p)
+Y1 = X2 + S1
+SWSVD_sparse = StepWiseSVD(Y1, threshold=1.0372)
+sum((SWSVD_sparse$u%*%diag(SWSVD_sparse$d)%*%t(SWSVD_sparse$v)-S1)**2)
+```
+We compare the result with truncated SVD even with knowledge about the rank of signal. We can find step wise SVD performs overwhelmingly better. Actually we almost recover the true signal.
+```{r}
+TSVD1 = svds(Y1, k=2, nu=2, nv=2)
+sum((TSVD1$u%*%diag(TSVD1$d)%*% t(TSVD1$v)-S1)**2)
+```
+
+Then for non-sparse case.
+```{r}
+S2 = randortho(n,"orthonormal")[,1:2] %*% diag(c(7,4))%*% randortho(p,"orthonormal")[1:2,]
+Y2 = X2 + S2
+SWSVD = StepWiseSVD(Y2, threshold=1.0372, sparse=FALSE)
+sum((SWSVD$u%*%diag(SWSVD$d)%*%t(SWSVD$v)-S2)**2)
+```
+```{r}
+TSVD2 = svds(Y2, k=2, nu=2, nv=2)
+sum((TSVD2$u%*%diag(TSVD2$d)%*% t(TSVD2$v)-S2)**2)
+```
+We can see step wise SVD still performs better. Notice we actually give truncated SVD some buff about the rank of signal.
+
+If we are dealing with other cases, by not setting parameter threshold, we can perform simulations. And by setting parameter parallel=TRUE, we can parallel the simulations and get results faster.
+
+## ScreeNot
+ScreeNot is actually finding the best threshold $t$ of Truncated SVD based on Frobenius norm. And the recovered signal is therefore $\hat{S}=\sum_{i=1}^p d_i u_i v_i^T I_{\{d_i>t\}}$. Notice the best threshold may not return the rank of real signal. In this algorithm, we need to specify an upper bound of signal rank, even a loose estimation. Details can be found in [4].
+
+In this example, we use correlated Gaussian noise from AR(1).
+```{r}
+X3 = mvrnorm(n, rep(0,p), diag(p)/n)
+for(i in 2:p){
+    X3[,i] = X3[,i]*(1-0.2) + X3[,i-1]*0.2
+}
+Y3 = X3 + S2
+screenot = ScreeNot(Y3, 5)
+sum((screenot$u%*%diag(screenot$d)%*%t(screenot$v)-S2)**2)
+```
+```{r, echo=FALSE}
+mse = c()
+r = seq(1,5,1)
+for(i in 1:5){
+    TSVD3 = svds(Y3, k=i, nu=i, nv=i)
+    if(i==1){
+        mse = c(mse, sum((tcrossprod(TSVD3$u, TSVD3$v)*TSVD3$d-S2)**2))
+    } else{
+        mse = c(mse, sum((TSVD3$u%*%diag(TSVD3$d)%*% t(TSVD3$v)-S2)**2))
+    }
+}
+ggplot(data=data.frame(r=r,mse=mse), 
+       aes(x=r, y=mse)) +
+    geom_line() + geom_point() +
+    labs(title="Error with Different Signal Rank", x="r", y ="Frobenius norm") +
+    theme_classic() + theme(plot.title = element_text(hjust = 0.5))
+```
+
+We can see ScreeNot gets the best threshold.
+
+## Rank of Signal
+Here we introduce two test statistics. Let $\lambda_1\ge\lambda_2\ge\cdots\lambda_p$ be the eigenvalues of $Y^{T}Y$.
+$$\begin{align}
+\mathbb{T}(r_0)&=\max_{r_0<i\le r_*}\frac{\lambda_i -\lambda_{i+1}}{\lambda_{i+1} -\lambda_{i+2}}\\
+\mathbb{T}_{r_0}&=\frac{\lambda_{r_0 +1} -\lambda_{r_0 +2}}{\lambda_{r_* +1} -\lambda_{r_* +2}}
+\end{align}$$
+Also, we have to perform simulations to get testing threshold like step wise SVD. In this page, we will use the authors' simulation results. We can perform simulations in our function by not setting threshold. Details can be found in [5].
+
+In our function, type 1 and 2 correspond to the two statistics we introduce. 
+
+We then use noise matrix $Z=A^{1/2}\mathcal{N}B^{1/2}$ as an example, where $\mathcal{N}$ is a Gaussian matrix with i.i.d entries.
+```{r}
+p = 100
+n = 200
+r1 = 5
+"%^%" = function(x, n){
+    with(eigen(x), vectors %*% (values^n * t(vectors)))
+}
+unit = function(idx, k){
+    vec = rep(0, k)
+    vec[idx] = 1
+    vec
+}
+R = 18*tcrossprod(unit(1,n),unit(1,p))+
+    16*tcrossprod(unit(2,n),unit(2,p))+
+    14*tcrossprod(unit(3,n),unit(3,p))
+SA = diag(c(rep(3,n/4),rep(4,n/4),rep(5,n/2)))
+SB = diag(c(rep(1,p/2),rep(2,p/2)))
+N = matrix(rnorm(p*n, mean=0, sd=sqrt(1/n)), nrow=n, byrow=TRUE)
+UA = randortho(n,"orthonormal")
+UB = randortho(p,"orthonormal")
+A = UA %*% SA %*% t(UA)
+B = UB %*% SB %*% t(UB)
+Y = R + (A%^%(1/2))%*%N%*%(B%^%(1/2))
+GetRank(Y, r1=5, type="1")
+```
+
+# Reference {-}
+[1] El Karoui, Noureddine. "[Spectrum estimation for large dimensional covariance matrices using random matrix theory](https://projecteuclid.org/journals/annals-of-statistics/volume-36/issue-6/Spectrum-estimation-for-large-dimensional-covariance-matrices-using-random-matrix/10.1214/07-AOS581.full)." The Annals of Statistics 36.6 (2008): 2757-2790.
+
+[2] Kong, Weihao, and Gregory Valiant. "[Spectrum estimation from samples](https://projecteuclid.org/journals/annals-of-statistics/volume-45/issue-5/Spectrum-estimation-from-samples/10.1214/16-AOS1525.full)." The Annals of Statistics 45.5 (2017): 2218-2247.
+
+[3] Ding, Xiucai. "[High dimensional deformed rectangular matrices with applications in matrix denoising](https://projecteuclid.org/journals/bernoulli/volume-26/issue-1/High-dimensional-deformed-rectangular-matrices-with-applications-in-matrix-denoising/10.3150/19-BEJ1129.short)." Bernoulli 26.1 (2020): 387-417.
+
+[4] Donoho, David L., Matan Gavish, and Elad Romanov. "[Screenot: Exact mse-optimal singular value thresholding in correlated noise](https://arxiv.org/abs/2009.12297)." arXiv preprint arXiv:2009.12297 (2020).
+
+[5] Ding, Xiucai, and Fan Yang. "[Tracy-Widom distribution for heterogeneous Gram matrices with applications in signal detection](https://ieeexplore.ieee.org/abstract/document/9779233?casa_token=Fd_plUknILUAAAAA:146HhiNeC5cVd_HqqFzZ7lf13hl0gNditifjDMKEVCO0ZhA6IsUGoeg6zOL0ktSkuxCDvCPTdew_)." IEEE Transactions on Information Theory, vol. 68, no. 10, pp. 6682-6715(2022).
+
+[6] Zheng, Shurong, Zhidong Bai, and Jianfeng Yao. "[Substitution principle for CLT of linear spectral statistics of high-dimensional sample covariance matrices with applications to hypothesis testing](https://projecteuclid.org/journals/annals-of-statistics/volume-43/issue-2/Substitution-principle-for-CLT-of-linear-spectral-statistics-of-high/10.1214/14-AOS1292.full)." The Annals of Statistics 43.2 (2015): 546-591.
+
+[7] Knowles, Antti, and Jun Yin. "[Anisotropic local laws for random matrices](https://link.springer.com/article/10.1007/s00440-016-0730-4)." Probability Theory and Related Fields 169.1 (2017): 257-352.
+
+[8] Ding, Xiucai, and Thomas Trogdon. "[A Riemann--Hilbert approach to the perturbation theory for orthogonal polynomials: Applications to numerical linear algebra and random matrix theory](https://arxiv.org/abs/2112.12354)." arXiv preprint arXiv:2112.12354 (2021).
+
+[9] El Karoui, Noureddine. "[Tracy–Widom limit for the largest eigenvalue of a large class of complex sample covariance matrices](https://projecteuclid.org/journals/annals-of-probability/volume-35/issue-2/TracyWidom-limit-for-the-largest-eigenvalue-of-a-large-class/10.1214/009117906000000917.full)." The Annals of Probability 35.2 (2007): 663-714.
+
+[10] Lee, Ji Oon, and Kevin Schnelli. "[Tracy–Widom distribution for the largest eigenvalue of real sample covariance matrices with general population](https://projecteuclid.org/journals/annals-of-applied-probability/volume-26/issue-6/TracyWidom-distribution-for-the-largest-eigenvalue-of-real-sample-covariance/10.1214/16-AAP1193.full)." The Annals of Applied Probability 26.6 (2016): 3786-3839.
